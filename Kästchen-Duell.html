@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kästchen-Duell</title>
+<style>
+:root{--bg:#f4f1e8;--card:#fffdf7;--ink:#222;--mute:#777;--grid:#b9c8e6;--edge:#ddd;--c1:#0a8a3c;--c2:#d9640b;--c3:#2563eb;--c4:#c026d3;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1c1b;--card:#262625;--ink:#eee;--mute:#999;--grid:#3a4560;--edge:#444;--c1:#2fbf63;--c2:#f08a3c;--c3:#5b9bff;--c4:#e879f9;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1c1c1b;--card:#262625;--ink:#eee;--mute:#999;--grid:#3a4560;--edge:#444;--c1:#2fbf63;--c2:#f08a3c;--c3:#5b9bff;--c4:#e879f9;color-scheme:dark}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:12px 14px}
+h1{font-size:1.4rem;margin:.2em 0}
+.card{background:var(--card);border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 1px 4px #0002;max-width:560px}
+label{display:block;margin:10px 0 4px;font-size:.9rem;color:var(--mute)}
+input,select,button{font:inherit;padding:10px 12px;border-radius:9px;border:1px solid var(--edge);background:var(--bg);color:var(--ink);box-sizing:border-box}
+input[type=text]{width:100%}
+button{cursor:pointer;background:var(--ink);color:var(--bg);border:0;font-weight:600}
+button.sec{background:transparent;color:var(--ink);border:1px solid var(--edge)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.score{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.pl{flex:1;min-width:110px;padding:8px;border-radius:12px;border:3px solid transparent;background:var(--card);text-align:center;color:var(--col)}
+.pl.act{border-color:var(--col)}
+.pl b{font-size:1.6rem;display:block}
+#status{text-align:center;margin:8px 0;font-weight:600;min-height:1.4em}
+svg{width:100%;height:auto;max-height:calc(100vh - 190px);display:block;background:var(--card);border-radius:12px;touch-action:manipulation;margin:0 auto}
+.hit{stroke:transparent;stroke-width:22;stroke-linecap:round;cursor:pointer}
+.my .hit:hover{stroke:var(--me);stroke-opacity:.4}
+.err{color:#d33;font-size:.9rem}
+.hide{display:none}
+small{color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<h1>▦ Kästchen-Duell</h1>
+
+<div id="lobby">
+  <div class="card">
+    <label>Dein Name</label>
+    <input type="text" id="name" maxlength="16" placeholder="z. B. Anna">
+    <div class="row">
+      <div><label>Spieler</label><select id="np"><option>2</option><option>3</option><option>4</option></select></div>
+      <div><label>Spielfeld</label><select id="size"></select></div>
+    </div>
+    <label><input type="checkbox" id="bonus" checked> Bonuszug: wer ein Kästchen schließt, darf nochmal</label>
+    <div class="row" style="margin-top:14px"><button id="create">Neues Spiel erstellen</button></div>
+  </div>
+  <div class="card">
+    <label>Oder Raumcode eingeben</label>
+    <div class="row"><input type="text" id="code" maxlength="6" placeholder="CODE" style="width:130px;text-transform:uppercase"><button id="join">Beitreten</button></div>
+    <p class="err" id="err"></p>
+  </div>
+  <p><small>Ohne Online-Partner, am selben Gerät:</small> <button class="sec" id="local">Lokal spielen</button></p>
+</div>
+
+<div id="game" class="hide">
+  <div class="row" style="justify-content:space-between">
+    <small id="room"></small>
+    <span><button class="sec" id="copy">Link kopieren</button> <button class="sec" id="leave">Verlassen</button></span>
+  </div>
+  <div class="score" id="score"></div>
+  <div id="status"></div>
+  <svg id="board" xmlns="http://www.w3.org/2000/svg"></svg>
+  <div class="row" style="margin-top:10px"><button id="again" class="hide">Neue Runde</button></div>
+</div>
+</main>
+
+<script>
+(function(){
+var S=50,M=30;
+var $=function(i){return document.getElementById(i)};
+var db=null,myId=null,ref=null,unsub=null,st=null,code=null,localMode=false;
+var sz=$("size");
+for(var k=3;k<=20;k++){var o=document.createElement("option");o.value=k;o.textContent=k+" × "+k;if(k===8)o.selected=true;sz.appendChild(o)}
+
+function safe(f){try{return f()}catch(e){return null}}
+function getName(){var v=$("name").value.trim();if(v)safe(function(){localStorage.setItem("kd_name",v)});return v||"Spieler"}
+safe(function(){$("name").value=localStorage.getItem("kd_name")||""});
+
+function fresh(n,np,bonus){
+  var e=[];for(var i=0;i<np;i++)e.push("");
+  return {n:n,np:np,bonus:bonus,h:new Array((n+1)*n).fill(0),v:new Array(n*(n+1)).fill(0),o:new Array(n*n).fill(0),turn:1,last:"",p:e.slice(),names:e.slice(),t:Date.now()};
+}
+function boxEdges(s,r,c){var n=s.n;return [s.h[r*n+c],s.h[(r+1)*n+c],s.v[r*(n+1)+c],s.v[r*(n+1)+c+1]]}
+
+function apply(s,type,idx){
+  var n=s.n;s=JSON.parse(JSON.stringify(s));
+  var arr=type==="h"?s.h:s.v;
+  if(arr[idx])return null;
+  arr[idx]=s.turn;s.last=type+idx;
+  var got=0;
+  for(var r=0;r<n;r++)for(var c=0;c<n;c++){
+    if(!s.o[r*n+c]&&boxEdges(s,r,c).every(Boolean)){s.o[r*n+c]=s.turn;got++}
+  }
+  if(!(got&&s.bonus))s.turn=s.turn%s.np+1;
+  s.t=Date.now();
+  return s;
+}
+function scores(s){var a=new Array(s.np+1).fill(0);s.o.forEach(function(x){if(x)a[x]++});return a}
+function full(){return localMode||st.p.every(Boolean)}
+function mySeat(){
+  if(localMode)return st.turn;
+  return st.p.indexOf(myId)+1;
+}
+function nm(i){return st.names[i-1]||"Spieler "+i}
+
+function render(){
+  if(!st)return;
+  var n=st.n,np=st.np,W=n*S+2*M,sc=scores(st),total=0,i,r,c;
+  for(i=1;i<=np;i++)total+=sc[i];
+  var done=total===n*n,seat=mySeat(),ready=full();
+  function col(i){return "var(--c"+i+")"}
+  var g='<rect x="'+M+'" y="'+M+'" width="'+n*S+'" height="'+n*S+'" fill="var(--grid)" fill-opacity=".12"/>';
+  for(i=0;i*S<=W;i++){var p=(M%S)+i*S;g+='<line x1="'+p+'" y1="0" x2="'+p+'" y2="'+W+'" stroke="var(--grid)"/><line x1="0" y1="'+p+'" x2="'+W+'" y2="'+p+'" stroke="var(--grid)"/>'}
+  for(r=0;r<n;r++)for(c=0;c<n;c++){
+    var o=st.o[r*n+c];
+    if(o){
+      g+='<rect x="'+(M+c*S+3)+'" y="'+(M+r*S+3)+'" width="'+(S-6)+'" height="'+(S-6)+'" rx="6" fill="'+col(o)+'" fill-opacity=".3"/>';
+      g+='<text x="'+(M+c*S+S/2)+'" y="'+(M+r*S+S/2+7)+'" text-anchor="middle" font-size="20" font-weight="700" fill="'+col(o)+'">'+nm(o).charAt(0).toUpperCase().replace(/[<&]/g,"")+'</text>';
+    }
+  }
+  function edge(type,r,c,v){
+    var x1=M+c*S,y1=M+r*S,x2=type==="h"?x1+S:x1,y2=type==="h"?y1:y1+S;
+    var idx=type==="h"?r*n+c:r*(n+1)+c;
+    if(v){var hl=st.last===type+idx;return '<line x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'" stroke="'+col(v)+'" stroke-width="'+(hl?8:5)+'" stroke-linecap="round"/>'}
+    if(done)return '';
+    return '<line class="hit" data-t="'+type+'" data-i="'+idx+'" x1="'+x1+'" y1="'+y1+'" x2="'+x2+'" y2="'+y2+'"/>';
+  }
+  for(r=0;r<=n;r++)for(c=0;c<n;c++)g+=edge("h",r,c,st.h[r*n+c]);
+  for(r=0;r<n;r++)for(c=0;c<=n;c++)g+=edge("v",r,c,st.v[r*(n+1)+c]);
+  for(r=0;r<=n;r++)for(c=0;c<=n;c++)g+='<circle cx="'+(M+c*S)+'" cy="'+(M+r*S)+'" r="3" fill="var(--ink)" fill-opacity=".55"/>';
+  var svg=$("board");
+  svg.setAttribute("viewBox","0 0 "+W+" "+W);
+  svg.innerHTML=g;
+  var myTurn=!done&&ready&&seat===st.turn;
+  svg.setAttribute("class",myTurn?"my":"");
+  svg.style.setProperty("--me",col(st.turn));
+  var h="";
+  for(i=1;i<=np;i++){
+    var label=st.names[i-1]||(localMode?"Spieler "+i:"wartet …");
+    if(!localMode&&seat===i)label+=" (du)";
+    h+='<div class="pl'+(!done&&ready&&st.turn===i?" act":"")+'" style="--col:'+col(i)+'"><small></small><b>'+sc[i]+'</b></div>';
+  }
+  $("score").innerHTML=h;
+  var smalls=$("score").getElementsByTagName("small");
+  for(i=1;i<=np;i++){var l=st.names[i-1]||(localMode?"Spieler "+i:"wartet …");if(!localMode&&seat===i)l+=" (du)";smalls[i-1].textContent=l}
+  var m;
+  if(done){
+    var mx=Math.max.apply(null,sc.slice(1)),w=[];
+    for(i=1;i<=np;i++)if(sc[i]===mx)w.push(nm(i));
+    m=w.length>1?"Unentschieden: "+w.join(" & "):"🏆 "+w[0]+" gewinnt!";
+  }else if(!ready){
+    m="Warte auf Mitspieler ("+st.p.filter(Boolean).length+"/"+np+") – Link oder Code "+code+" teilen";
+  }else if(!seat)m="Du schaust zu.";
+  else m=myTurn?"Du bist dran – zieh einen Strich":nm(st.turn)+" ist dran …";
+  $("status").textContent=m;
+  $("again").className=done&&(seat||localMode)?"":"hide";
+}
+
+function save(s){
+  st=s;render();
+  if(!localMode&&ref)ref.set(s).catch(function(e){$("status").textContent="Speichern fehlgeschlagen: "+(e&&e.message||e)});
+}
+
+$("board").addEventListener("click",function(e){
+  var t=e.target;if(!t.classList||!t.classList.contains("hit"))return;
+  if(!full()||mySeat()!==st.turn)return;
+  var s=apply(st,t.getAttribute("data-t"),+t.getAttribute("data-i"));
+  if(s)save(s);
+});
+
+function show(game){$("lobby").className=game?"hide":"";$("game").className=game?"":"hide"}
+function leave(){if(unsub)unsub();unsub=null;ref=null;st=null;code=null;localMode=false;location.hash="";show(false)}
+$("leave").onclick=leave;
+
+$("local").onclick=function(){
+  localMode=true;var s=fresh(+sz.value,+$("np").value,$("bonus").checked);
+  st=s;$("room").textContent="Lokales Spiel";$("copy").className="hide";show(true);render();
+};
+$("again").onclick=function(){
+  var s=fresh(st.n,st.np,st.bonus);s.p=st.p;s.names=st.names;save(s);
+};
+
+function genCode(){var a="ABCDEFGHJKLMNPQRSTUVWXYZ",s="";for(var i=0;i<4;i++)s+=a[Math.floor(Math.random()*a.length)];return s}
+
+function open(c,create){
+  if(!db){$("err").textContent="Online-Modus nicht verfügbar (bitte angemeldet öffnen). Nutze „Lokal spielen“.";return}
+  code=c;ref=db.doc("games/"+c);
+  var name=getName();
+  ref.get().then(function(snap){
+    var s;
+    if(create){
+      s=fresh(+sz.value,+$("np").value,$("bonus").checked);s.p[0]=myId;s.names[0]=name;
+    }else{
+      if(!snap.exists){$("err").textContent="Raum "+c+" nicht gefunden.";ref=null;return}
+      s=snap.data();
+      if(s.p.indexOf(myId)<0){
+        var free=s.p.indexOf("");
+        if(free>=0){s.p[free]=myId;s.names[free]=name}
+      }
+    }
+    return ref.set(s).then(function(){
+      location.hash=c;
+      $("room").textContent="Raum "+c;$("copy").className="";show(true);
+      unsub=ref.onSnapshot(function(d){if(d.exists){st=d.data();render()}});
+    });
+  }).catch(function(e){$("err").textContent="Fehler: "+(e&&e.message||e)});
+}
+$("create").onclick=function(){$("err").textContent="";open(genCode(),true)};
+$("join").onclick=function(){$("err").textContent="";var c=$("code").value.trim().toUpperCase();if(c)open(c,false)};
+$("copy").onclick=function(){
+  var u="https://claude.ai/artifact/2jfe11pzQsTrfwDR2DPXk7#"+code;
+  safe(function(){navigator.clipboard.writeText(u)});
+  $("copy").textContent="Kopiert ✓";setTimeout(function(){$("copy").textContent="Link kopieren"},1500);
+};
+
+if(window.claude&&claude.use){
+  Promise.all([claude.use("db"),claude.use("user")]).then(function(r){
+    db=r[0];
+    return r[1]?r[1].id():null;
+  }).then(function(id){
+    myId=id||"";
+    if(!db||!myId){db=null;return}
+    var h=location.hash.replace("#","").toUpperCase();
+    if(/^[A-Z0-9]{3,6}$/.test(h)){$("code").value=h;open(h,false)}
+  }).catch(function(){db=null});
+}
+})();
+</script>
+</body>
+</html>
